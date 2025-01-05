@@ -16,7 +16,16 @@ sess = sim.generate_session(queries=queries, window_duration=DURATION)
 
 sess = sess // 10  # remove the wait ID for now
 
-# true_regions = sim.find_contiguous_regions(sess)
+true_regions = (
+    pl.DataFrame(
+        sim.find_contiguous_regions(sess),
+        orient="row",
+        schema=["start", "end", "literal"],
+    )
+    .with_columns(QID=pl.col("literal") % 100)
+    .filter(pl.col("QID") != 0)
+)
+true_regions.write_csv("true.csv")
 
 st = sim.get_sample_times(session_duration=DURATION, sample_period=SAMPLE_PERIOD)
 
@@ -29,7 +38,9 @@ query_elapsed_times = zip(
     sample[:-1],
     sample[:-1] % 100,
     sample[:-1] // 100,
-    st[:-1] - (sample[:-1] // 100) + 1,  # Added one to fudge div0 errors, need to think about this
+    st[:-1]
+    - (sample[:-1] // 100)
+    + 1,  # Added one to fudge div0 errors, need to think about this
     sample[1:] % 100,
 )
 
@@ -39,7 +50,7 @@ df = pl.DataFrame(query_elapsed_times, schema=headers)
 df2 = df.filter(pl.col("QID") != 0)
 df2.write_csv("results.csv")
 df3 = (
-    df2.group_by(by="Start time")
+    df2.group_by(["Start time", "QID"])
     .agg(
         [
             pl.min("Time since start").alias("a"),
@@ -47,16 +58,34 @@ df3 = (
             pl.max("Timestamp").alias("Last"),
         ]
     )
-    .with_columns((2 * pl.col("a") + pl.col("Last") - pl.col("First")).alias("Estimate"))
-    .with_columns((pl.max_horizontal(SAMPLE_PERIOD / pl.col("Estimate"), 1)).alias("Weight"))
-    .with_columns((pl.col("Estimate") * pl.col("Weight")).alias("weighted_est"))  # this is pointless as it just cancels out to the sample period
+    .with_columns((pl.col("Last") - pl.col("First")).alias("c"))
+    .with_columns((2 * pl.col("a") + pl.col("c")).alias("Estimate"))
+    .with_columns(
+        (pl.max_horizontal(SAMPLE_PERIOD / pl.col("Estimate"), 1)).alias("Weight")
+    )
+    .with_columns((pl.col("Estimate") * pl.col("Weight")).alias("weighted_est"))
+    .with_columns((pl.col("Estimate").mean().over("QID")).alias("est_mean"))
+    .with_columns((pl.col("Estimate").var().over("QID")).alias("est_var"))
+    .with_columns((pl.col("a").mean().over("QID")).alias("a_mean"))
+    .with_columns(((16 / 12) * (pl.col("a_mean") ** 2)).alias("exp_var"))
+    # This is all a bit of a random bodge, but it seems to be more or less correct
+    .with_columns(
+        (
+            pl.col("est_mean")
+            + (
+                np.sqrt(1 - pl.col("exp_var") / pl.col("est_var"))
+                * (pl.col("Estimate") - pl.col("est_mean"))
+            )
+        ).alias("est_adj")
+    )
+    .with_columns(
+        (pl.max_horizontal(SAMPLE_PERIOD / pl.col("est_adj"), 1)).alias("weight_adj")
+    )
+    .with_columns((pl.col("Estimate") * pl.col("weight_adj")).alias("weighted_est_adj"))
 )
 df3.write_csv("results2.csv")
 
 print(df3.describe())
-
-# something not right with my weighting or something... this comes out around 50% of the correct value
-# the mean of a is remarkably close to the correct value... is that just a weird coincidence?
 
 # when the queries have no variance, the mean(2est) value looks good... but the weighted one is wrong still
 # It looks like my weighting is adding spurious variance where there is none and biasing the estimate
@@ -64,3 +93,5 @@ print(df3.describe())
 
 # todo: add grouping by QID here
 print(df3.select(pl.sum("weighted_est")) / df3.select(pl.sum("Weight")))
+print(df3.select(pl.sum("weighted_est_adj")) / df3.select(pl.sum("weight_adj")))
+# Need to figure out how to use this to reduce the weighting or perhaps just come up with a different weighting scheme based on a post-hoc adjustment?
