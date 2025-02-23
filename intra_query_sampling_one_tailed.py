@@ -6,6 +6,7 @@ regular samples, but harder for jittered. Although given EWS doesn't do jitter i
 
 """
 
+from pathlib import Path
 from pandas import DataFrame
 from matplotlib import pyplot as pt
 import seaborn as sns
@@ -14,7 +15,7 @@ true_query_length = 1000
 
 results = []
 
-for sampling_period in range(10, 1500, 10):
+for sampling_period in range(10, 1100, 25):
     for offset in range(0, min(true_query_length, sampling_period), 1):
         num_samples_in_query = (true_query_length - offset) // sampling_period
         last_sample_index = offset + sampling_period * num_samples_in_query
@@ -45,7 +46,7 @@ for sampling_period in range(10, 1500, 10):
 df = DataFrame(
     results,
     columns=(
-        "sampling_period",
+        "Sampling Period / ms",
         "query_length_in_periods",
         "offset",
         "true_query_length",
@@ -53,7 +54,7 @@ df = DataFrame(
         "min_length",
         "max_length",
         "est_length_2s",
-        "est_length_2s_plus",
+        "Estimated Duration / ms",
         "est_length_h2n",
         "est_length_com",
         "est_length_com2",
@@ -98,8 +99,8 @@ ax.spines["right"].set_color(outer_lines)
 sns.boxplot(
     df,
     # x="query_length_in_periods",
-    x="sampling_period",
-    y="est_length_2s_plus",
+    x="Sampling Period / ms",
+    y="Estimated Duration / ms",
     native_scale=True,
     whis=(5, 95),
     fliersize=0,
@@ -110,5 +111,12 @@ sns.boxplot(
 
 fig = pt.gcf()
 fig.set_size_inches(8, 4)
+
+save_dir = Path(
+    "/Users/simon/source/sonotley-dot-uk/content/posts/session-sampling-2/images"
+)
+
+if save_dir:
+    pt.savefig(save_dir / f"2a-plus-c-{chart_theme}.svg")
 
 pt.show()
