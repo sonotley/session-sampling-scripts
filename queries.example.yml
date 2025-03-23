@@ -1,13 +1,13 @@
 queries:
   - id: 1
-    mean_duration: 80
-    duration_spread: 0
+    mean_duration: 50
+    duration_spread: 150
     target_periodicity: 1000
     wait_state_ratios:
       1: 3
       2: 2
       3: 1
-    duration_distribution: exponential
+    duration_distribution: uniform
 #  - id: 2
 #    mean_duration: 25
 #    duration_spread: 0

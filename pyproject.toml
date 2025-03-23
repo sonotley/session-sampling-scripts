@@ -10,5 +10,5 @@ dependencies = [
     "pandas>=2.2.3",
     "polars>=1.19.0",
     "seaborn>=0.13.2",
-    "session-sampling-simulator>=0.1.0.post1",
+    "session-sampling-simulator>=0.2.0",
 ]
