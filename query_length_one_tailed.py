@@ -31,6 +31,8 @@ def generate_lognorm(mean: float, sd: float, length: int) -> np.ndarray:
 
 
 # todo: this still has some out by one issues
+# todo: this seems right when the mean duration is << sample period, but not quite right thereafter
+# todo: I'm starting to suspect my actual sampling code may be at fault
 def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
     dist = np.zeros(true_dist.size)
     for i, x in enumerate(true_dist):
@@ -47,8 +49,12 @@ def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
         # Then the case where you get one less than the max
         if max_possible_samples > 1:
             p_case_min = 1 - p_case_max
-            lower_limit = int(sample_period * (max_possible_samples - 1))
-            upper_limit = int(lower_limit + 2 * ((i % sample_period) - sample_period))
+            # I redid this maths so it makes more sense but the result is the same
+            c = int(sample_period * (max_possible_samples - 1))
+            min_a = int(i - (sample_period * max_possible_samples))  # todo: maybe minus 1 inside the bracket to be picky?
+            max_a = sample_period
+            lower_limit = 2 * min_a + c
+            upper_limit = 2 * max_a + c
             dist[lower_limit:upper_limit] += (
                 p_case_min * x / (upper_limit - lower_limit)
             )
@@ -69,7 +75,7 @@ results = []
 all_observed_queries_results = []
 all_true_queries_results = []
 
-for sample_period in [200]:
+for sample_period in [100]:
     # for sample_period in 1000 / np.linspace(start=1, stop=10, num=5):
 
     for run in range(1, 2):
@@ -439,7 +445,7 @@ for i in range(1, 6):
                 mean=queries[i - 1].mean_duration,
                 length=500,  # add 0.01 just to convince zero case to work
             ),
-            sample_period=200,
+            sample_period=sample_period,
         ),
         ax=axes2[5, i - 1],
         color=c,
@@ -447,7 +453,8 @@ for i in range(1, 6):
     raw_est = (
         all_observed_queries.filter(pl.col("QID") == i).select("estimate").to_numpy().T
     )
-    kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method="silverman")
+    kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.03)
+    print(kde.factor)
     sns.lineplot(
         2 * kde.pdf(range(500)), ax=axes2[5, i - 1], color="black", linestyle="dashed"
     )
