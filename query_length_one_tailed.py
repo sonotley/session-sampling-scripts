@@ -75,7 +75,7 @@ results = []
 all_observed_queries_results = []
 all_true_queries_results = []
 
-for sample_period in [100]:
+for sample_period in [50]:
     # for sample_period in 1000 / np.linspace(start=1, stop=10, num=5):
 
     for run in range(1, 2):
@@ -386,16 +386,18 @@ sns.boxplot(
     # **hue_params,
 )
 
-# It's pretty clear from these distributions how much the uniform 2a distribution flattens out the true distribution
-# I'm wondering if trying to deconvolve it might be useful.
-# That's kind of what my aadj method already does, but it doesn't seem fully effective
-# todo: a version of this that shows a might be cool
+
 all_true_queries = pl.concat(all_true_queries_results)
 all_observed_queries = pl.concat(all_observed_queries_results)
 cp = sns.color_palette("hls", 8)
 bw = 2
 for i in range(1, 6):
     c = cp[i - 1]
+    true_dist = generate_lognorm(
+        sd=queries[i - 1].duration_spread + 0.01,  # add 0.01 just to convince zero case to work
+        mean=queries[i - 1].mean_duration,
+        length=500,
+    )
     sns.histplot(
         all_true_queries.filter(pl.col("QID") == i),
         x="true_duration",
@@ -403,6 +405,12 @@ for i in range(1, 6):
         binwidth=bw,
         binrange=(0, 500),
         color=c,
+    )
+    sns.lineplot(
+        true_dist * len(all_true_queries.filter(pl.col("QID") == i)) * bw,
+        ax=axes2[0, i - 1],
+        color='grey',
+        linewidth=1,
     )
     sns.histplot(
         all_observed_queries.filter(pl.col("QID") == i),
@@ -440,11 +448,7 @@ for i in range(1, 6):
     )
     sns.lineplot(
         generate_obs_dist_from_true_dist(
-            generate_lognorm(
-                sd=queries[i - 1].duration_spread + 0.01,
-                mean=queries[i - 1].mean_duration,
-                length=500,  # add 0.01 just to convince zero case to work
-            ),
+            true_dist,
             sample_period=sample_period,
         ),
         ax=axes2[5, i - 1],
@@ -453,10 +457,10 @@ for i in range(1, 6):
     raw_est = (
         all_observed_queries.filter(pl.col("QID") == i).select("estimate").to_numpy().T
     )
-    kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.03)
+    kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.02)
     print(kde.factor)
     sns.lineplot(
-        2 * kde.pdf(range(500)), ax=axes2[5, i - 1], color="black", linestyle="dashed"
+        2 * kde.pdf(range(500)), ax=axes2[5, i - 1], color="grey", linewidth=1, #linestyle="dotted"
     )
 
 
