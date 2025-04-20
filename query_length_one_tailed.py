@@ -105,12 +105,12 @@ for sample_period in [50]:
 
         for phase in np.linspace(0, 0.99, 20):
             st = sim.get_sample_times(
-                session_duration=DURATION, sample_period=sample_period, phase=phase
+                session_duration=DURATION, sample_period=sample_period, phase=phase, strategy=sim.SamplingStrategy.UNIFORM
             )
 
             sample = sess[st]
 
-            query_elapsed_times = zip(
+            sample_data = zip(
                 st[:-1],
                 sample[:-1],
                 sample[:-1] % 100,
@@ -133,7 +133,7 @@ for sample_period in [50]:
             # Select only the observations where the QID was non-zero
             # i.e. where we've observed a query execution
             non_zero_samples = (
-                pl.DataFrame(query_elapsed_times, schema=headers)
+                pl.DataFrame(sample_data, schema=headers)
                 .filter(pl.col("QID") != 0)
                 .join(true_regions, on="start")
             )
@@ -316,7 +316,7 @@ aggregated_summary.write_csv("aggregated_summary.csv")
 # todo: although saying that those are suppose to represent different queries so I would want to split them in real life
 
 fig, axes = pt.subplots(2, 2)
-fig2, axes2 = pt.subplots(6, 5)
+fig2, axes2 = pt.subplots(4, 5)
 
 a = sns.boxplot(
     normalized_combined_summary.filter(pl.col("variable").str.contains("relerror")),
@@ -420,6 +420,21 @@ for i in range(1, 6):
         binrange=(0, 500),
         color=c,
     )
+    sns.lineplot(
+        true_dist * len(all_observed_queries.filter(pl.col("QID") == i)) * bw,
+        ax=axes2[1, i - 1],
+        color='grey',
+        linestyle='dotted',
+        linewidth=1,
+    )
+    exp_obs_dist = true_dist * [min(1, x/sample_period) for x in range(500)]
+    exp_obs_dist /= sum(exp_obs_dist)
+    sns.lineplot(
+        exp_obs_dist * len(all_observed_queries.filter(pl.col("QID") == i)) * bw,
+        ax=axes2[1, i - 1],
+        color='grey',
+        linewidth=1,
+    )
     sns.histplot(
         all_observed_queries.filter(pl.col("QID") == i),
         x="estimate",
@@ -428,30 +443,39 @@ for i in range(1, 6):
         binrange=(0, 500),
         color=c,
     )
-    sns.histplot(
-        all_observed_queries.filter(pl.col("QID") == i),
-        x="estimate",
-        weights="weight_aadj",
-        ax=axes2[3, i - 1],
-        binwidth=bw,
-        binrange=(0, 500),
-        color=c,
+    sns.lineplot(
+        generate_obs_dist_from_true_dist(
+            true_dist,
+            sample_period=sample_period,
+        )* len(all_observed_queries.filter(pl.col("QID") == i)) * bw,
+        ax=axes2[2, i - 1],
+        color='grey',
+        linewidth=1,
     )
-    sns.histplot(
-        all_observed_queries.filter(pl.col("QID") == i),
-        x="estimate_aadj",
-        weights="weight_aadj",
-        ax=axes2[4, i - 1],
-        binwidth=bw,
-        binrange=(0, 500),
-        color=c,
-    )
+    # sns.histplot(
+    #     all_observed_queries.filter(pl.col("QID") == i),
+    #     x="estimate",
+    #     weights="weight_aadj",
+    #     ax=axes2[3, i - 1],
+    #     binwidth=bw,
+    #     binrange=(0, 500),
+    #     color=c,
+    # )
+    # sns.histplot(
+    #     all_observed_queries.filter(pl.col("QID") == i),
+    #     x="estimate_aadj",
+    #     weights="weight_aadj",
+    #     ax=axes2[4, i - 1],
+    #     binwidth=bw,
+    #     binrange=(0, 500),
+    #     color=c,
+    # )
     sns.lineplot(
         generate_obs_dist_from_true_dist(
             true_dist,
             sample_period=sample_period,
         ),
-        ax=axes2[5, i - 1],
+        ax=axes2[3, i - 1],
         color=c,
     )
     raw_est = (
@@ -460,7 +484,7 @@ for i in range(1, 6):
     kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.02)
     print(kde.factor)
     sns.lineplot(
-        2 * kde.pdf(range(500)), ax=axes2[5, i - 1], color="grey", linewidth=1, #linestyle="dotted"
+        2 * kde.pdf(range(500)), ax=axes2[3, i - 1], color="grey", linewidth=1, #linestyle="dotted"
     )
 
 
@@ -476,7 +500,6 @@ axes[0, 0].grid(True, axis="y")
 axes[0, 1].grid(True, axis="y")
 axes[1, 0].grid(True, axis="y")
 axes[1, 1].grid(True, axis="y")
-# pt.tight_layout()
 pt.show()
 
 
