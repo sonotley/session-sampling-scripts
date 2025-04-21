@@ -31,27 +31,30 @@ def generate_lognorm(mean: float, sd: float, length: int) -> np.ndarray:
 
 
 # todo: this still has some out by one issues
-# todo: this seems right when the mean duration is << sample period, but not quite right thereafter
-# todo: I'm starting to suspect my actual sampling code may be at fault
 def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
     dist = np.zeros(true_dist.size)
     for i, x in enumerate(true_dist):
         # i = j + 1
 
-        max_possible_samples = i // sample_period
+        min_possible_samples = (i // sample_period)
+        max_possible_samples = min_possible_samples + 1
+        a_cutoff = i % sample_period
+        p_case_max = a_cutoff / sample_period
 
         # First the case where you get the maximum number of samples in
-        p_case_max = (i % sample_period) / sample_period
-        lower_limit = int(sample_period * max_possible_samples)
-        upper_limit = int(lower_limit + 2 * (i % sample_period))
+        # if max_possible_samples > 1:
+        c = int((max_possible_samples - 1) * sample_period)
+        min_a = 0
+        max_a = a_cutoff
+        lower_limit = 2 * min_a + c
+        upper_limit = 2 * max_a + c
         dist[lower_limit:upper_limit] += x * p_case_max / (upper_limit - lower_limit)
 
         # Then the case where you get one less than the max
-        if max_possible_samples > 1:
+        if min_possible_samples > 0:
             p_case_min = 1 - p_case_max
-            # I redid this maths so it makes more sense but the result is the same
-            c = int(sample_period * (max_possible_samples - 1))
-            min_a = int(i - (sample_period * max_possible_samples))  # todo: maybe minus 1 inside the bracket to be picky?
+            c = int(sample_period * (min_possible_samples - 1))
+            min_a = a_cutoff # todo: maybe +1 to be picky?
             max_a = sample_period
             lower_limit = 2 * min_a + c
             upper_limit = 2 * max_a + c
@@ -95,7 +98,9 @@ for sample_period in [50]:
         )
 
         true_regions.write_csv("true.csv")
-        all_true_queries_results.append(true_regions)
+        all_true_queries_results.append(
+            true_regions
+        )  # todo: shouldn't this have a run id or something? I guess it's okay because I join it into the
         true_summary = true_regions.group_by("QID").agg(
             [
                 pl.mean("true_duration").alias("true_mean"),
@@ -105,7 +110,10 @@ for sample_period in [50]:
 
         for phase in np.linspace(0, 0.99, 20):
             st = sim.get_sample_times(
-                session_duration=DURATION, sample_period=sample_period, phase=phase, strategy=sim.SamplingStrategy.UNIFORM
+                session_duration=DURATION,
+                sample_period=sample_period,
+                phase=phase,
+                strategy=sim.SamplingStrategy.UNIFORM,
             )
 
             sample = sess[st]
@@ -394,7 +402,8 @@ bw = 2
 for i in range(1, 6):
     c = cp[i - 1]
     true_dist = generate_lognorm(
-        sd=queries[i - 1].duration_spread + 0.01,  # add 0.01 just to convince zero case to work
+        sd=queries[i - 1].duration_spread
+        + 0.01,  # add 0.01 just to convince zero case to work
         mean=queries[i - 1].mean_duration,
         length=500,
     )
@@ -409,7 +418,7 @@ for i in range(1, 6):
     sns.lineplot(
         true_dist * len(all_true_queries.filter(pl.col("QID") == i)) * bw,
         ax=axes2[0, i - 1],
-        color='grey',
+        color="grey",
         linewidth=1,
     )
     sns.histplot(
@@ -423,16 +432,16 @@ for i in range(1, 6):
     sns.lineplot(
         true_dist * len(all_observed_queries.filter(pl.col("QID") == i)) * bw,
         ax=axes2[1, i - 1],
-        color='grey',
-        linestyle='dotted',
+        color="grey",
+        linestyle="dotted",
         linewidth=1,
     )
-    exp_obs_dist = true_dist * [min(1, x/sample_period) for x in range(500)]
+    exp_obs_dist = true_dist * [min(1, x / sample_period) for x in range(500)]
     exp_obs_dist /= sum(exp_obs_dist)
     sns.lineplot(
         exp_obs_dist * len(all_observed_queries.filter(pl.col("QID") == i)) * bw,
         ax=axes2[1, i - 1],
-        color='grey',
+        color="grey",
         linewidth=1,
     )
     sns.histplot(
@@ -447,9 +456,11 @@ for i in range(1, 6):
         generate_obs_dist_from_true_dist(
             true_dist,
             sample_period=sample_period,
-        )* len(all_observed_queries.filter(pl.col("QID") == i)) * bw,
+        )
+        * len(all_observed_queries.filter(pl.col("QID") == i))
+        * bw,
         ax=axes2[2, i - 1],
-        color='grey',
+        color="grey",
         linewidth=1,
     )
     # sns.histplot(
@@ -484,7 +495,10 @@ for i in range(1, 6):
     kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.02)
     print(kde.factor)
     sns.lineplot(
-        2 * kde.pdf(range(500)), ax=axes2[3, i - 1], color="grey", linewidth=1, #linestyle="dotted"
+        2 * kde.pdf(range(500)),
+        ax=axes2[3, i - 1],
+        color="grey",
+        linewidth=1,  # linestyle="dotted"
     )
 
 
