@@ -1,4 +1,5 @@
 import math
+import pickle
 
 import numpy as np
 import polars as pl
@@ -69,9 +70,7 @@ def extract_sample_data(
 
     # Select only the observations where the QID was non-zero
     # i.e. where we've observed a query execution
-    return (
-        pl.DataFrame(sample_data, schema=headers).filter(pl.col("qid") != 0)
-    )
+    return pl.DataFrame(sample_data, schema=headers).filter(pl.col("qid") != 0)
 
 
 def roll_up_samples_to_executions(sample_data: pl.DataFrame) -> pl.DataFrame:
@@ -88,6 +87,7 @@ def roll_up_samples_to_executions(sample_data: pl.DataFrame) -> pl.DataFrame:
         .with_columns((2 * pl.col("a") + pl.col("c")).alias("estimate"))
     )
 
+
 def generate_lognorm(mean: float, sd: float, length: int) -> np.ndarray:
     mu = math.log(mean**2 / math.sqrt(mean**2 + sd**2))
     sigma = np.sqrt(math.log(1 + (sd**2 / mean**2)))
@@ -103,7 +103,7 @@ def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
     for i, x in enumerate(true_dist):
         # i = j + 1
 
-        min_possible_samples = (i // sample_period)
+        min_possible_samples = i // sample_period
         max_possible_samples = min_possible_samples + 1
         a_cutoff = i % sample_period
         p_case_max = a_cutoff / sample_period
@@ -121,7 +121,7 @@ def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
         if min_possible_samples > 0:
             p_case_min = 1 - p_case_max
             c = int(sample_period * (min_possible_samples - 1))
-            min_a = a_cutoff # todo: maybe +1 to be picky?
+            min_a = a_cutoff  # todo: maybe +1 to be picky?
             max_a = sample_period
             lower_limit = 2 * min_a + c
             upper_limit = 2 * max_a + c
@@ -132,15 +132,16 @@ def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
     return dist / sum(dist)
 
 
-def plot_distributions(execution_data: pl.DataFrame, sample_period, bw=2, max_x=500) -> None:
-
+def plot_distributions(
+    execution_data: pl.DataFrame, sample_period, bw=2, max_x=1500
+) -> None:
     fig, axes = pt.subplots(4, 5)
     cp = sns.color_palette("hls", 8)
     for i in range(1, 6):
         c = cp[i - 1]
         true_dist = generate_lognorm(
             sd=queries[i - 1].duration_spread
-               + 0.01,  # add 0.01 just to convince zero case to work
+            + 0.01,  # add 0.01 just to convince zero case to work
             mean=queries[i - 1].mean_duration,
             length=max_x,
         )
@@ -209,7 +210,10 @@ def plot_distributions(execution_data: pl.DataFrame, sample_period, bw=2, max_x=
             color=c,
         )
         raw_est = (
-            execution_data.filter(pl.col("qid_right") == i).select("estimate").to_numpy().T
+            execution_data.filter(pl.col("qid_right") == i)
+            .select("estimate")
+            .to_numpy()
+            .T
         )
         kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.02)
         print(kde.factor)
@@ -223,18 +227,87 @@ def plot_distributions(execution_data: pl.DataFrame, sample_period, bw=2, max_x=
     pt.show()
 
 
-if __name__ == "__main__":
-    DURATION = 36000000
-    sample_period=100
+def test_dist(execution_data: pl.DataFrame, qid: int):
+    min_diff = 1
+    with open("dists.pkl", "rb") as f:
+        dists = pickle.load(f)
+    # this is actually a vector similarity search... intrigiung
+    observed = np.histogram(
+        execution_data.filter(pl.col("qid_right") == qid).select("estimate").to_numpy(),
+        bins=range(0, 2001),
+        density=True,
+    )[0]
+    for d in dists:
+        diff = np.sum((d["dist"] - observed) ** 2)
+        # print(d["mean"], d["sd"], diff)
+        if diff < min_diff:
+            min_diff = diff
+            best = (d["mean"], d["sd"])
+    print(best)
 
-    queries = [
-        make_query(
-            id=i + 1, mean_duration=220, duration_spread=i * 10, session_proportion=0.16
-        )
-        for i in range(0, 5)
+
+def summarise_run(
+    execution_data: pl.DataFrame,
+    include_weighted: bool = False,
+    sample_period: int = None,
+):
+    core = [
+        pl.mean("true_duration").alias("true_mean"),
+        (pl.col("true_duration").filter(pl.col("estimate").is_not_null()))
+        .mean()
+        .alias("true_mean_obs"),
+        pl.mean("estimate").alias("est_mean"),
+        # pl.std("estimate").alias("est_sd"),
     ]
+    if include_weighted:
+        if not sample_period:
+            raise ValueError(
+                "sample_period must be specified to calculate weighted estimates"
+            )
+        r = execution_data.group_by("qid").agg(
+            core
+            + [
+                (
+                    (
+                        (
+                            (
+                                pl.col("estimate")
+                                * pl.max_horizontal(
+                                    sample_period / pl.col("estimate"), 1
+                                )
+                            ).sum()
+                        )
+                        / (
+                            (
+                                pl.max_horizontal(sample_period / pl.col("estimate"), 1)
+                            ).sum()
+                        )
+                    ).alias("est_mean_weighted")
+                )
+            ]
+        )
+    else:
+        r = execution_data.group_by("qid").agg(core)
 
-    sess = sim.generate_session(queries=queries, window_duration=DURATION)
+    return r
+
+def flatten(l):
+    return [item for sublist in l for item in sublist]
+
+def summarise_many_runs(summary_data: pl.DataFrame) -> pl.DataFrame:
+    aggs = flatten([(pl.mean(x), pl.std(x).alias(f"{x}_sd")) for x in summary_data.columns if "mean" in x])
+    return (
+        summary_data.group_by("qid")
+        .agg(aggs)
+        .sort("qid")
+    )
+
+
+# todo: support multiple phases and sample_periods
+def generate_sampled_session(
+    queries: list[sim.Query], duration: int, sample_period: int
+) -> pl.DataFrame:
+    sess = sim.generate_session(queries=queries, window_duration=duration)
 
     sess = sess // 10  # remove the wait ID for now
 
@@ -242,11 +315,63 @@ if __name__ == "__main__":
 
     samples = extract_sample_data(session=sess, sample_period=sample_period, phase=0)
 
-    sampled_executions=roll_up_samples_to_executions(samples)
+    sampled_executions = roll_up_samples_to_executions(samples)
 
-    all_executions_augmented = all_executions.join(sampled_executions, on="start", how="left")
+    return all_executions.join(sampled_executions, on="start", how="left")
 
-    # all_executions_augmented.write_csv("all_execs.csv")
 
-    plot_distributions(all_executions_augmented, sample_period)
+def pretty_print_mean_and_sd(mean, sd) -> str:
+    return f"{int(mean)} ± {int(sd)}"
 
+def pretty_print_summary(summary: pl.DataFrame):
+    formatted_rows = []
+    for row in summary.iter_rows(named=True):
+        formatted_row = {"qid": row["qid"]}
+        for col in [x for x in row if "_sd" in x]:
+            formatted_row[col[:-3]] = pretty_print_mean_and_sd(row[col[:-3]], row[col])
+        formatted_rows.append(formatted_row)
+
+    a = pl.DataFrame(formatted_rows)
+
+    with pl.Config(
+    tbl_formatting="MARKDOWN",
+    tbl_hide_column_data_types=True,
+    tbl_hide_dataframe_shape=True,):
+        print(a)
+
+
+if __name__ == "__main__":
+    DURATION = 3600000
+    sample_period = 1000
+
+    queries = [
+        make_query(
+            id=i, mean_duration=40 * i, duration_spread=40 * i, session_proportion=0.1
+        )
+        for i in range(1, 6)
+    ]
+
+    run_data = []
+    run_summaries = []
+
+    for run in range(5):
+        run_executions_augmented = generate_sampled_session(
+            queries=queries, duration=DURATION, sample_period=sample_period
+        )
+        run_summary = summarise_run(run_executions_augmented)
+        run_data.append(run_executions_augmented.with_columns(run=run))
+        run_summaries.append(run_summary.with_columns(run=run))
+
+    all_executions_augmented = pl.concat(run_data)
+    runs = pl.concat(run_summaries)
+
+    # all_executions_augmented.write_database(table_name='execs', connection="postgresql://postgres:postgres@localhost/simon")
+
+    # plot_distributions(all_executions_augmented, sample_period)
+
+    pretty_print_summary(summarise_many_runs(runs))
+
+    # print(summarise_run(all_executions_augmented, include_weighted=True, sample_period=sample_period))
+
+    # for i in range(1, 6):
+    #     test_dist(all_executions_augmented, i)
