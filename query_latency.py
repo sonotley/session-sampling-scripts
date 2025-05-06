@@ -8,6 +8,7 @@ import matplotlib.pyplot as pt
 from scipy.stats import lognorm, gaussian_kde
 
 from session_sampling_simulator import session_simulator as sim
+from snignificant import round_to_sf, round_to_position
 
 
 def make_query(
@@ -291,16 +292,20 @@ def summarise_run(
 
     return r
 
+
 def flatten(l):
     return [item for sublist in l for item in sublist]
 
+
 def summarise_many_runs(summary_data: pl.DataFrame) -> pl.DataFrame:
-    aggs = flatten([(pl.mean(x), pl.std(x).alias(f"{x}_sd")) for x in summary_data.columns if "mean" in x])
-    return (
-        summary_data.group_by("qid")
-        .agg(aggs)
-        .sort("qid")
+    aggs = flatten(
+        [
+            (pl.mean(x), pl.std(x).alias(f"{x}_sd"))
+            for x in summary_data.columns
+            if "mean" in x
+        ]
     )
+    return summary_data.group_by("qid").agg(aggs).sort("qid")
 
 
 # todo: support multiple phases and sample_periods
@@ -321,7 +326,10 @@ def generate_sampled_session(
 
 
 def pretty_print_mean_and_sd(mean, sd) -> str:
-    return f"{int(mean)} ± {int(sd)}"
+    rounded_sd = round_to_sf(sd)
+    rounded_mean = round_to_position(mean, rounded_sd.exponent)
+    return f"{rounded_mean.as_str} ± {rounded_sd.as_str}"
+
 
 def pretty_print_summary(summary: pl.DataFrame):
     formatted_rows = []
@@ -334,9 +342,10 @@ def pretty_print_summary(summary: pl.DataFrame):
     a = pl.DataFrame(formatted_rows)
 
     with pl.Config(
-    tbl_formatting="MARKDOWN",
-    tbl_hide_column_data_types=True,
-    tbl_hide_dataframe_shape=True,):
+        tbl_formatting="MARKDOWN",
+        tbl_hide_column_data_types=True,
+        tbl_hide_dataframe_shape=True,
+    ):
         print(a)
 
 
