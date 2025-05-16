@@ -9,8 +9,10 @@ dependencies = [
     "milestone-timer>=1.0.0",
     "pandas>=2.2.3",
     "polars>=1.19.0",
+    "psycopg2-binary>=2.9.10",
     "pyarrow>=19.0.1",
     "scipy>=1.15.2",
     "seaborn>=0.13.2",
     "session-sampling-simulator>=0.2.0",
+    "sqlalchemy>=2.0.40",
 ]

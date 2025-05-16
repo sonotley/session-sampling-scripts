@@ -36,7 +36,7 @@ def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
     for i, x in enumerate(true_dist):
         # i = j + 1
 
-        min_possible_samples = (i // sample_period)
+        min_possible_samples = i // sample_period
         max_possible_samples = min_possible_samples + 1
         a_cutoff = i % sample_period
         p_case_max = a_cutoff / sample_period
@@ -54,7 +54,7 @@ def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
         if min_possible_samples > 0:
             p_case_min = 1 - p_case_max
             c = int(sample_period * (min_possible_samples - 1))
-            min_a = a_cutoff # todo: maybe +1 to be picky?
+            min_a = a_cutoff  # todo: maybe +1 to be picky?
             max_a = sample_period
             lower_limit = 2 * min_a + c
             upper_limit = 2 * max_a + c

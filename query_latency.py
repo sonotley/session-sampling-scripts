@@ -1,5 +1,7 @@
 import math
 import pickle
+from collections.abc import Iterable
+
 
 import numpy as np
 import polars as pl
@@ -97,9 +99,8 @@ def generate_lognorm(mean: float, sd: float, length: int) -> np.ndarray:
     return htd_base.pdf(range(length))
 
 
-# todo: this still has some out by one issues
-# todo: this is wrong somewhere, it's not correctly dealing with the scenario of getting less than the max number
-def generate_obs_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
+# todo: this still has some out by one issues possibly
+def generate_est_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
     dist = np.zeros(true_dist.size)
     for i, x in enumerate(true_dist):
         # i = j + 1
@@ -192,7 +193,7 @@ def plot_distributions(
             color=c,
         )
         sns.lineplot(
-            generate_obs_dist_from_true_dist(
+            generate_est_dist_from_true_dist(
                 true_dist,
                 sample_period=sample_period,
             )
@@ -203,7 +204,7 @@ def plot_distributions(
             linewidth=1,
         )
         sns.lineplot(
-            generate_obs_dist_from_true_dist(
+            generate_est_dist_from_true_dist(
                 true_dist,
                 sample_period=sample_period,
             ),
@@ -258,7 +259,21 @@ def summarise_run(
         .mean()
         .alias("true_mean_obs"),
         pl.mean("estimate").alias("est_mean"),
-        # pl.std("estimate").alias("est_sd"),
+        # (
+        #     100
+        #     * (pl.mean("estimate") - pl.col("true_duration"))
+        #     / pl.col("true_duration")
+        # )
+        # .filter(pl.col("estimate").is_not_null())
+        # .mean()
+        # .alias("perc_per_execution_error_obs"),
+        # (
+        #     100
+        #     * (pl.mean("estimate") - pl.col("true_duration"))
+        #     / pl.col("true_duration")
+        # )
+        # .mean()
+        # .alias("perc_per_execution_error"),
     ]
     if include_weighted:
         if not sample_period:
@@ -270,21 +285,11 @@ def summarise_run(
             + [
                 (
                     (
-                        (
-                            (
-                                pl.col("estimate")
-                                * pl.max_horizontal(
-                                    sample_period / pl.col("estimate"), 1
-                                )
-                            ).sum()
-                        )
-                        / (
-                            (
-                                pl.max_horizontal(sample_period / pl.col("estimate"), 1)
-                            ).sum()
-                        )
-                    ).alias("est_mean_weighted")
-                )
+                        pl.col("estimate")
+                        * pl.max_horizontal(sample_period / pl.col("estimate"), 1)
+                    ).sum()
+                    / (pl.max_horizontal(sample_period / pl.col("estimate"), 1)).sum()
+                ).alias("est_mean_weighted"),
             ]
         )
     else:
@@ -293,24 +298,23 @@ def summarise_run(
     return r
 
 
-def flatten(l):
+def flatten(l: Iterable[Iterable]):
     return [item for sublist in l for item in sublist]
 
 
 def summarise_many_runs(summary_data: pl.DataFrame) -> pl.DataFrame:
     aggs = flatten(
         [
-            (pl.mean(x), pl.std(x).alias(f"{x}_sd"))
+            (pl.mean(x), pl.std(x).alias(f"{x}_sd"), ((100*(pl.col(x) - pl.col("true_mean"))/pl.col("true_mean")).mean().alias(f"perc_error_{x}")), ((100*(pl.col(x) - pl.col("true_mean"))/pl.col("true_mean")).std().alias(f"perc_error_{x}_sd")))
             for x in summary_data.columns
-            if "mean" in x
+            if "mean" in x or "error" in x
         ]
     )
     return summary_data.group_by("qid").agg(aggs).sort("qid")
 
 
-# todo: support multiple phases and sample_periods
 def generate_sampled_session(
-    queries: list[sim.Query], duration: int, sample_period: int
+    queries: list[sim.Query], duration: int, sample_period: int, phase: float | Iterable[float] = 0
 ) -> pl.DataFrame:
     sess = sim.generate_session(queries=queries, window_duration=duration)
 
@@ -318,11 +322,19 @@ def generate_sampled_session(
 
     all_executions = find_all_query_executions(sess)
 
-    samples = extract_sample_data(session=sess, sample_period=sample_period, phase=0)
+    phases = phase if isinstance(phase, Iterable) else [phase]
 
-    sampled_executions = roll_up_samples_to_executions(samples)
+    chunks = []
 
-    return all_executions.join(sampled_executions, on="start", how="left")
+    for p in phases:
+    
+        samples = extract_sample_data(session=sess, sample_period=sample_period, phase=p)
+
+        sampled_executions = roll_up_samples_to_executions(samples)
+
+        chunks.append(all_executions.join(sampled_executions, on="start", how="left").with_columns(phase=p))
+
+    return pl.concat(chunks)
 
 
 def pretty_print_mean_and_sd(mean, sd) -> str:
@@ -335,7 +347,7 @@ def pretty_print_summary(summary: pl.DataFrame):
     formatted_rows = []
     for row in summary.iter_rows(named=True):
         formatted_row = {"qid": row["qid"]}
-        for col in [x for x in row if "_sd" in x]:
+        for col in [x for x in row if "_sd" in x and x != "perc_error_true_mean_sd"]:
             formatted_row[col[:-3]] = pretty_print_mean_and_sd(row[col[:-3]], row[col])
         formatted_rows.append(formatted_row)
 
@@ -352,6 +364,10 @@ def pretty_print_summary(summary: pl.DataFrame):
 if __name__ == "__main__":
     DURATION = 3600000
     sample_period = 1000
+    number_of_runs = 1
+    number_of_phases = 1
+
+    phases = np.linspace(start=0, stop=1, endpoint=False, num=number_of_phases)
 
     queries = [
         make_query(
@@ -363,11 +379,13 @@ if __name__ == "__main__":
     run_data = []
     run_summaries = []
 
-    for run in range(5):
+    for run in range(number_of_runs):
         run_executions_augmented = generate_sampled_session(
-            queries=queries, duration=DURATION, sample_period=sample_period
+            queries=queries, duration=DURATION, sample_period=sample_period, phase=phases
         )
-        run_summary = summarise_run(run_executions_augmented)
+        run_summary = summarise_run(
+            run_executions_augmented, include_weighted=True, sample_period=sample_period
+        )
         run_data.append(run_executions_augmented.with_columns(run=run))
         run_summaries.append(run_summary.with_columns(run=run))
 
@@ -376,7 +394,7 @@ if __name__ == "__main__":
 
     # all_executions_augmented.write_database(table_name='execs', connection="postgresql://postgres:postgres@localhost/simon")
 
-    # plot_distributions(all_executions_augmented, sample_period)
+    plot_distributions(all_executions_augmented, sample_period, bw=10)
 
     pretty_print_summary(summarise_many_runs(runs))
 
