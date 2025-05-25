@@ -1,7 +1,7 @@
 import math
 import pickle
 from collections.abc import Iterable
-
+import itertools
 
 import numpy as np
 import polars as pl
@@ -100,26 +100,33 @@ def generate_lognorm(mean: float, sd: float, length: int) -> np.ndarray:
 
 
 # todo: this still has some out by one issues possibly
+# todo: instead of enumerating the true dist it would be better for it to come with an array of bin centres
 def generate_est_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
     dist = np.zeros(true_dist.size)
-    for i, x in enumerate(true_dist):
-        # i = j + 1
+    # Here d represents a duration and x is the probability that the true duration is equal to i
+    for d, x in enumerate(true_dist):
 
-        min_possible_samples = i // sample_period
+        # First we calculate the minimum and maximum number of times an execution of duration d could potentially be sampled
+        # The max and min always differ by 1
+        min_possible_samples = d // sample_period
         max_possible_samples = min_possible_samples + 1
-        a_cutoff = i % sample_period
+        
+        # The greatest value that 'a' can take whilst still fitting max_possible_samples into an execution of duration d
+        a_cutoff = d % sample_period
+
+        # The probability of an execution of duration d being sampled max_possible_samples times
         p_case_max = a_cutoff / sample_period
 
         # First the case where you get the maximum number of samples in
-        # if max_possible_samples > 1:
         c = int((max_possible_samples - 1) * sample_period)
         min_a = 0
         max_a = a_cutoff
         lower_limit = 2 * min_a + c
         upper_limit = 2 * max_a + c
-        dist[lower_limit:upper_limit] += x * p_case_max / (upper_limit - lower_limit)
+        dist[lower_limit:upper_limit + 1] += x * p_case_max / (upper_limit - lower_limit + 1)
 
-        # Then the case where you get one less than the max
+        # Then the case where you get one less than the max, unless that number would be zero 
+        # (in which case it means we don't sample the execution at all so we don't add any probabilty)
         if min_possible_samples > 0:
             p_case_min = 1 - p_case_max
             c = int(sample_period * (min_possible_samples - 1))
@@ -127,8 +134,8 @@ def generate_est_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
             max_a = sample_period
             lower_limit = 2 * min_a + c
             upper_limit = 2 * max_a + c
-            dist[lower_limit:upper_limit] += (
-                p_case_min * x / (upper_limit - lower_limit)
+            dist[lower_limit:upper_limit + 1] += (
+                p_case_min * x / (upper_limit - lower_limit + 1)
             )
 
     return dist / sum(dist)
@@ -218,7 +225,6 @@ def plot_distributions(
             .T
         )
         kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.02)
-        print(kde.factor)
         sns.lineplot(
             2 * kde.pdf(range(max_x)),
             ax=axes[3, i - 1],
@@ -229,13 +235,13 @@ def plot_distributions(
     pt.show()
 
 
-def test_dist(execution_data: pl.DataFrame, qid: int):
+def test_dist(execution_data: pl.DataFrame):
     min_diff = 1
     with open("dists.pkl", "rb") as f:
         dists = pickle.load(f)
     # this is actually a vector similarity search... intrigiung
     observed = np.histogram(
-        execution_data.filter(pl.col("qid_right") == qid).select("estimate").to_numpy(),
+        execution_data.select("estimate").to_numpy(),
         bins=range(0, 2001),
         density=True,
     )[0]
@@ -245,7 +251,7 @@ def test_dist(execution_data: pl.DataFrame, qid: int):
         if diff < min_diff:
             min_diff = diff
             best = (d["mean"], d["sd"])
-    print(best)
+    return best
 
 
 def summarise_run(
@@ -280,7 +286,7 @@ def summarise_run(
             raise ValueError(
                 "sample_period must be specified to calculate weighted estimates"
             )
-        r = execution_data.group_by("qid").agg(
+        r = execution_data.group_by(["qid", "phase"]).agg(
             core
             + [
                 (
@@ -293,7 +299,7 @@ def summarise_run(
             ]
         )
     else:
-        r = execution_data.group_by("qid").agg(core)
+        r = execution_data.group_by(["qid", "phase"]).agg(core)
 
     return r
 
@@ -365,7 +371,7 @@ if __name__ == "__main__":
     DURATION = 3600000
     sample_period = 1000
     number_of_runs = 1
-    number_of_phases = 1
+    number_of_phases = 5
 
     phases = np.linspace(start=0, stop=1, endpoint=False, num=number_of_phases)
 
@@ -386,8 +392,20 @@ if __name__ == "__main__":
         run_summary = summarise_run(
             run_executions_augmented, include_weighted=True, sample_period=sample_period
         )
+        
+        # todo: add something here to do the vector search and add it to the df
+        # todo: using the KDE for the search would probably be far better
+        #  and using pgvector to do similarity search would probably be much faster
+        vector_ests = []
+        for q, p in itertools.product(range(1, 6), phases):
+            vector_ests.append((q, p, test_dist(run_executions_augmented.filter((pl.col("qid_right") == q) & (pl.col("phase") == p)))[0]))
+            
+        vector_df = pl.DataFrame(vector_ests, schema=["qid", "phase", "est_mean_vector"], orient="row")
+
         run_data.append(run_executions_augmented.with_columns(run=run))
-        run_summaries.append(run_summary.with_columns(run=run))
+        
+        #  todo: run summary doesn't incluse phase, need to add option to preserve it
+        run_summaries.append(run_summary.with_columns(run=run).join(vector_df, on=["qid", "phase"]))
 
     all_executions_augmented = pl.concat(run_data)
     runs = pl.concat(run_summaries)
@@ -398,7 +416,7 @@ if __name__ == "__main__":
 
     pretty_print_summary(summarise_many_runs(runs))
 
-    # print(summarise_run(all_executions_augmented, include_weighted=True, sample_period=sample_period))
+    print(summarise_run(all_executions_augmented, include_weighted=True, sample_period=sample_period))
 
     # for i in range(1, 6):
     #     test_dist(all_executions_augmented, i)

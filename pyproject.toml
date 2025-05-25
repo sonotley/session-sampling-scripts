@@ -13,6 +13,6 @@ dependencies = [
     "pyarrow>=19.0.1",
     "scipy>=1.15.2",
     "seaborn>=0.13.2",
-    "session-sampling-simulator>=0.2.0",
+    "session-sampling-simulator>=0.2.1",
     "sqlalchemy>=2.0.40",
 ]
