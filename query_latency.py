@@ -91,15 +91,17 @@ def roll_up_samples_to_executions(sample_data: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def generate_lognorm(mean: float, sd: float, length: int) -> np.ndarray:
+def generate_lognorm(mean: float, sd: float, size: int, internal_size: int | None = None) -> np.ndarray:
+    if not internal_size:
+        internal_size = size
     mu = math.log(mean**2 / math.sqrt(mean**2 + sd**2))
     sigma = np.sqrt(math.log(1 + (sd**2 / mean**2)))
 
     htd_base = lognorm(s=sigma, scale=np.exp(mu))
-    return htd_base.pdf(range(length))
+    return htd_base.pdf(range(internal_size)[:size])  # check for out by ones here
 
 
-# todo: this still has some out by one issues possibly
+# todo: this still has some out by one issues possibly - think i've got them
 # todo: instead of enumerating the true dist it would be better for it to come with an array of bin centres
 def generate_est_dist_from_true_dist(true_dist: np.ndarray, sample_period: int):
     dist = np.zeros(true_dist.size)
@@ -152,7 +154,7 @@ def plot_distributions(
             sd=queries[i - 1].duration_spread
             + 0.01,  # add 0.01 just to convince zero case to work
             mean=queries[i - 1].mean_duration,
-            length=max_x,
+            size=max_x,
         )
         sns.histplot(
             execution_data.filter(pl.col("qid") == i),
