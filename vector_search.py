@@ -1,3 +1,11 @@
+"""Functions for performing a similarity search given a histogram
+
+The functions provided by this module are closures that set up the necessary in-memory structures
+(a database connection, or a dictionary of known histograms) and return a function to perform
+a search against them.
+
+"""
+
 import psycopg2 as pg
 import numpy as np
 import pickle

@@ -1,8 +1,6 @@
-"""Trying to estimate the total query time from the known true start and samples within it.
+"""Script to test estimators of individual query execution duration given samples within that execution.
 
-Technically if we know the true start of the next sampled state we could use that as well to correct a bit more.
-In most cases it is probably of no importance... also IIRC EWS doesn't save samples of idle sessions, that's fine for
-regular samples, but harder for jittered. Although given EWS doesn't do jitter it's pretty academic.
+Makes a nice chart to show that the 2a+c estimator is unbiased (well it would show that if it included the mean).
 
 """
 

@@ -1,3 +1,5 @@
+"""Script to generate vectors representing distributions of estimated latency and write them to pgVector and to numpy arrays in a pickle"""
+
 from itertools import product
 import pickle
 import psycopg2 as pg
@@ -5,14 +7,15 @@ from psycopg2.extras import execute_values
 
 import numpy as np
 
-from query_latency import generate_est_dist_from_true_dist, generate_lognorm
+from query_latency import generate_lognorm
+from query_latency_plots import generate_est_dist_curve_from_true_dist
 
 dists = []
 
 for mean, z in product(
     np.arange(start=5, stop=500, step=1), np.arange(start=0.1, stop=2, step=0.2)
 ):
-    dist = generate_est_dist_from_true_dist(
+    dist = generate_est_dist_curve_from_true_dist(
         generate_lognorm(mean, mean * z, 4000), 1000
     )
     # dists.append({"mean": mean, "sd": mean * z, "dist": dist})
