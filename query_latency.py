@@ -5,6 +5,7 @@ and calculated the true and estimated query latencies.
 
 """
 
+import json
 from collections.abc import Iterable
 import itertools
 import datetime
@@ -268,7 +269,7 @@ def create_datetime_directory(root: Path, dt=None):
 
 
 def perform_runs(
-    queries: list[sim.Query],
+    queries: list[sim.Query] | None = None,
     duration: int | None = None,
     sample_period: int | None = None,
     number_of_runs: int | None = None,
@@ -287,7 +288,13 @@ def perform_runs(
     if save_run_data:
         save_dir = create_datetime_directory(Path() / "saved")
 
-    phases = np.linspace(start=0, stop=1, endpoint=False, num=number_of_phases)
+    if read_run_data_from:
+        with open(read_run_data_from / "args", "r") as f:
+            run_args = json.load(f)
+        number_of_runs = run_args.get("number_of_runs")
+        sample_period = run_args.get("sample_period")
+    else:
+        phases = np.linspace(start=0, stop=1, endpoint=False, num=number_of_phases)
 
     run_data = []
     run_summaries = []
@@ -307,6 +314,17 @@ def perform_runs(
 
             if save_run_data:
                 run_executions_augmented.write_parquet(save_dir / f"run{run}")
+                with open(save_dir / "args", "w") as f:
+                    json.dump(
+                        {
+                            "duration": duration,
+                            "sample_period": sample_period,
+                            "number_of_phases": number_of_phases,
+                            "number_of_runs": number_of_runs,
+                            "queries": [str(q) for q in queries],
+                        },
+                        fp=f,
+                    )
 
         run_summary = summarise_run(
             run_executions_augmented, include_weighted=True, sample_period=sample_period
@@ -374,12 +392,14 @@ if __name__ == "__main__":
     vector_searcher = get_db_search_function("postgres://simon@localhost/simon")
 
     all_executions_augmented, runs = perform_runs(
-        queries=queries,
-        duration=3600000,
-        sample_period=1000,
-        number_of_runs=1,
-        number_of_phases=5,
+        # queries=queries,
+        # duration=3600000,
+        # sample_period=1000,
+        # number_of_runs=1,
+        # number_of_phases=5,
         # vector_search_function=vector_searcher,
+        # save_run_data=True,
+        read_run_data_from=Path("saved/20250813144601"),
     )
 
     # all_executions_augmented.write_database(table_name='execs', if_table_exists='replace', connection="postgresql://postgres:postgres@localhost/simon")
