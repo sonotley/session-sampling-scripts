@@ -22,9 +22,9 @@ def generate_dist_curve(
 
         htd_base = lognorm(s=sigma, scale=np.exp(mu))
     elif dist.lower() in ("uniform", "u"):
-        htd_base = uniform(loc = mean - spread, scale = 2 * spread)
+        htd_base = uniform(loc=mean - spread, scale=2 * spread)
     elif dist.lower() in ("exponential", "ex"):
-        htd_base = expon(scale = mean)
+        htd_base = expon(scale=mean)
     return htd_base.pdf(range(internal_size)[:size])  # check for out by ones here
 
 
@@ -59,7 +59,9 @@ def generate_est_dist_curve_from_true_dist(true_dist: np.ndarray, sample_period:
         if min_possible_samples > 0:
             p_case_min = 1 - p_case_max
             c = int(sample_period * (min_possible_samples - 1))
-            min_a = a_cutoff  + 1 # think it makes sense to have the +1 to prevent double counting
+            min_a = (
+                a_cutoff + 1
+            )  # think it makes sense to have the +1 to prevent double counting
             max_a = sample_period
             lower_limit = 2 * min_a + c
             upper_limit = 2 * max_a + c

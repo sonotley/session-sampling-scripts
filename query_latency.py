@@ -21,8 +21,15 @@ from snignificant import round_to_sf, round_to_position
 from vector_search import get_brute_force_function, get_db_search_function
 
 
+mt = MilestoneTimer()
+
+
 def make_query(
-    id: int, mean_duration: int, duration_spread: int, session_proportion: float, duration_dist: str
+    id: int,
+    mean_duration: int,
+    duration_spread: int,
+    session_proportion: float,
+    duration_dist: str,
 ) -> sim.Query:
     return sim.Query(
         id=id,
@@ -51,7 +58,7 @@ def extract_sample_data(
     session: np.ndarray, sample_period: int, phase: float
 ) -> pl.DataFrame:
     st = sim.get_sample_times(
-        session_duration=DURATION,
+        session_duration=len(session),
         sample_period=sample_period,
         phase=phase,
         strategy=sim.SamplingStrategy.UNIFORM,
@@ -243,7 +250,8 @@ def executions_to_hist(execution_data: pl.DataFrame, bins: int) -> np.ndarray:
         density=True,
     )[0]
 
-def create_datetime_directory(root: Path, dt = None):
+
+def create_datetime_directory(root: Path, dt=None):
     """
     Creates a new directory in the current working directory,
     named after the current datetime in YYYYMMDDHHMMSS format.
@@ -259,29 +267,27 @@ def create_datetime_directory(root: Path, dt = None):
     return root / dir_name
 
 
-if __name__ == "__main__":
-    # todo: refactor all this bit into functions
-    DURATION = 3600000
-    sample_period = 1000
-    number_of_runs = 10
-    number_of_phases = 5
+def perform_runs(
+    queries: list[sim.Query],
+    duration: int | None = None,
+    sample_period: int | None = None,
+    number_of_runs: int | None = None,
+    number_of_phases: int | None = None,
+    save_run_data: bool = False,
+    read_run_data_from: Path | None = None,
+    vector_search_function=None,
+):
+    if not read_run_data_from and not (
+        queries and duration and sample_period and number_of_runs and number_of_phases
+    ):
+        raise ValueError(
+            "When not reading from a directory, you must specify all parameters."
+        )
 
-    save_session_data = True
-    read_session_data_from = Path("saved/20250813111021")
-
-    mt = MilestoneTimer()
-
-    if save_session_data:
+    if save_run_data:
         save_dir = create_datetime_directory(Path() / "saved")
 
     phases = np.linspace(start=0, stop=1, endpoint=False, num=number_of_phases)
-
-    queries = [
-        make_query(
-            id=i, mean_duration=50 + 250 * (i-1), duration_spread=300, session_proportion=0.05, duration_dist="lognormal"
-        )
-        for i in range(1, 6)
-    ]
 
     run_data = []
     run_summaries = []
@@ -289,18 +295,18 @@ if __name__ == "__main__":
     print(mt.add_milestone("Queries ready"))
 
     for run in range(number_of_runs):
-        if read_session_data_from:
-            run_executions_augmented = pl.read_parquet(read_session_data_from / f"run{run}")
+        if read_run_data_from:
+            run_executions_augmented = pl.read_parquet(read_run_data_from / f"run{run}")
         else:
             run_executions_augmented = generate_sampled_session(
                 queries=queries,
-                duration=DURATION,
+                duration=duration,
                 sample_period=sample_period,
                 phase=phases,
             )
 
-            if save_session_data:
-                run_executions_augmented.write_parquet(save_dir / f"run{run}")  
+            if save_run_data:
+                run_executions_augmented.write_parquet(save_dir / f"run{run}")
 
         run_summary = summarise_run(
             run_executions_augmented, include_weighted=True, sample_period=sample_period
@@ -308,44 +314,35 @@ if __name__ == "__main__":
 
         print(mt.add_milestone("Session simulation complete"))
 
-        # todo: using the KDE for the search would probably be far better
+        if vector_search_function:
+            qids = run_summary.select(pl.col("qid").unique()).to_series().to_list()
+            # todo: using the KDE for the search would probably be far better
+            vector_ests = []
+            for q, p in itertools.product(qids, phases):
+                observed_dist = executions_to_hist(
+                    run_executions_augmented.filter(
+                        (pl.col("qid_right") == q) & (pl.col("phase") == p)
+                    ),
+                    bins=4000,
+                )
+                vector_ests.append((q, p, vector_search_function(observed_dist)[0]))
 
-        # estimate_using_vector = get_brute_force_function("dists.pkl")
-        estimate_using_vector = get_db_search_function(
-            "postgres://simon@localhost/simon"
-        )
-
-        # todo: something here to try out my new transformation method
-        # I'm not sure how to do it beyond just iterating over every row and building up the distribution so it's going to be slow
-
-        # transformation method
-        # for each execution, add an amount 1/i for i between a + c and a + sample_period to a distribution of i where i represents the true duration
-        for q, p in itertools.product(range(1, 6), phases):
-            local_execs = run_executions_augmented.filter((pl.col("qid_right") == q) & (pl.col("phase") == p))
-
-
-        vector_ests = []
-        for q, p in itertools.product(range(1, 6), phases):
-            observed_dist = executions_to_hist(
-                run_executions_augmented.filter(
-                    (pl.col("qid_right") == q) & (pl.col("phase") == p)
-                ),
-                bins=4000,
+            vector_df = pl.DataFrame(
+                vector_ests, schema=["qid", "phase", "est_mean_vector"], orient="row"
             )
-            vector_ests.append((q, p, estimate_using_vector(observed_dist)[0]))
 
-        vector_df = pl.DataFrame(
-            vector_ests, schema=["qid", "phase", "est_mean_vector"], orient="row"
-        )
+            print(mt.add_milestone("Vector estimation complete"))
 
-        print(mt.add_milestone("Vector estimation complete"))
+            #  todo: run summary doesn't incluse phase, need to add option to preserve it
+            run_summaries.append(
+                run_summary.with_columns(run=run).join(vector_df, on=["qid", "phase"])
+            )
+
+        else:
+            #  todo: run summary doesn't incluse phase, need to add option to preserve it
+            run_summaries.append(run_summary.with_columns(run=run))
 
         run_data.append(run_executions_augmented.with_columns(run=run))
-
-        #  todo: run summary doesn't incluse phase, need to add option to preserve it
-        run_summaries.append(
-            run_summary.with_columns(run=run).join(vector_df, on=["qid", "phase"])
-        )
 
         print(mt.add_milestone("Summarisation complete"))
 
@@ -356,13 +353,47 @@ if __name__ == "__main__":
 
     print(mt.add_milestone("Data concatenated"))
 
+    return all_executions_augmented, runs
+
+
+if __name__ == "__main__":
+    sample_period = 1000
+
+    queries = [
+        make_query(
+            id=i,
+            mean_duration=50 + 250 * (i - 1),
+            duration_spread=300,
+            session_proportion=0.05,
+            duration_dist="lognormal",
+        )
+        for i in range(1, 6)
+    ]
+
+    # vector_searcher = get_brute_force_function("dists.pkl")
+    vector_searcher = get_db_search_function("postgres://simon@localhost/simon")
+
+    all_executions_augmented, runs = perform_runs(
+        queries=queries,
+        duration=3600000,
+        sample_period=1000,
+        number_of_runs=1,
+        number_of_phases=5,
+        # vector_search_function=vector_searcher,
+    )
+
     # all_executions_augmented.write_database(table_name='execs', if_table_exists='replace', connection="postgresql://postgres:postgres@localhost/simon")
 
     # print(mt.add_milestone("Data written to Postgres"))
 
-    plot_distributions(all_executions_augmented, sample_period, queries=queries, bw=10, query_ids=(1,2,3,4,5))
+    plot_distributions(
+        all_executions_augmented,
+        sample_period,
+        queries=queries,
+        bw=10,
+        query_ids=(1, 2, 3, 4, 5),
+    )
 
     pretty_print_summary(summarise_many_runs(runs))
 
     # print(summarise_run(all_executions_augmented, include_weighted=True, sample_period=sample_period))
-
