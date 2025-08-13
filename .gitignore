@@ -1,4 +1,7 @@
 .idea
 .vscode
 *.csv
+*.pkl
+.python-version
 __pycache__
+saved

@@ -7,6 +7,9 @@ and calculated the true and estimated query latencies.
 
 from collections.abc import Iterable
 import itertools
+import datetime
+import os
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -228,6 +231,7 @@ def pretty_print_summary(summary: pl.DataFrame):
         tbl_formatting="MARKDOWN",
         tbl_hide_column_data_types=True,
         tbl_hide_dataframe_shape=True,
+        tbl_cols=-1,
     ):
         print(a)
 
@@ -239,20 +243,42 @@ def executions_to_hist(execution_data: pl.DataFrame, bins: int) -> np.ndarray:
         density=True,
     )[0]
 
+def create_datetime_directory(root: Path, dt = None):
+    """
+    Creates a new directory in the current working directory,
+    named after the current datetime in YYYYMMDDHHMMSS format.
+    """
+    now = dt or datetime.datetime.now()
+    dir_name = now.strftime("%Y%m%d%H%M%S")
+
+    try:
+        os.makedirs(root / dir_name)
+    except OSError as e:
+        print(f"Error creating directory '{dir_name}': {e}")
+
+    return root / dir_name
+
 
 if __name__ == "__main__":
+    # todo: refactor all this bit into functions
     DURATION = 3600000
-    sample_period = 100
-    number_of_runs = 1
+    sample_period = 1000
+    number_of_runs = 10
     number_of_phases = 5
 
+    save_session_data = True
+    read_session_data_from = Path("saved/20250813111021")
+
     mt = MilestoneTimer()
+
+    if save_session_data:
+        save_dir = create_datetime_directory(Path() / "saved")
 
     phases = np.linspace(start=0, stop=1, endpoint=False, num=number_of_phases)
 
     queries = [
         make_query(
-            id=i, mean_duration=100 * i, duration_spread=80, session_proportion=0.1, duration_dist="uniform"
+            id=i, mean_duration=50 + 250 * (i-1), duration_spread=300, session_proportion=0.05, duration_dist="lognormal"
         )
         for i in range(1, 6)
     ]
@@ -263,12 +289,19 @@ if __name__ == "__main__":
     print(mt.add_milestone("Queries ready"))
 
     for run in range(number_of_runs):
-        run_executions_augmented = generate_sampled_session(
-            queries=queries,
-            duration=DURATION,
-            sample_period=sample_period,
-            phase=phases,
-        )
+        if read_session_data_from:
+            run_executions_augmented = pl.read_parquet(read_session_data_from / f"run{run}")
+        else:
+            run_executions_augmented = generate_sampled_session(
+                queries=queries,
+                duration=DURATION,
+                sample_period=sample_period,
+                phase=phases,
+            )
+
+            if save_session_data:
+                run_executions_augmented.write_parquet(save_dir / f"run{run}")  
+
         run_summary = summarise_run(
             run_executions_augmented, include_weighted=True, sample_period=sample_period
         )
@@ -287,6 +320,9 @@ if __name__ == "__main__":
 
         # transformation method
         # for each execution, add an amount 1/i for i between a + c and a + sample_period to a distribution of i where i represents the true duration
+        for q, p in itertools.product(range(1, 6), phases):
+            local_execs = run_executions_augmented.filter((pl.col("qid_right") == q) & (pl.col("phase") == p))
+
 
         vector_ests = []
         for q, p in itertools.product(range(1, 6), phases):
@@ -318,9 +354,13 @@ if __name__ == "__main__":
     all_executions_augmented = pl.concat(run_data)
     runs = pl.concat(run_summaries)
 
-    # all_executions_augmented.write_database(table_name='execs', connection="postgresql://postgres:postgres@localhost/simon")
+    print(mt.add_milestone("Data concatenated"))
 
-    plot_distributions(all_executions_augmented, sample_period, queries=queries, bw=10, query_ids=(1,2))
+    # all_executions_augmented.write_database(table_name='execs', if_table_exists='replace', connection="postgresql://postgres:postgres@localhost/simon")
+
+    # print(mt.add_milestone("Data written to Postgres"))
+
+    plot_distributions(all_executions_augmented, sample_period, queries=queries, bw=10, query_ids=(1,2,3,4,5))
 
     pretty_print_summary(summarise_many_runs(runs))
 

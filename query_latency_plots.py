@@ -6,7 +6,7 @@ import matplotlib.pyplot as pt
 import numpy as np
 import polars as pl
 import seaborn as sns
-from scipy.stats import gaussian_kde, lognorm, uniform
+from scipy.stats import gaussian_kde, lognorm, uniform, expon
 from session_sampling_simulator import session_simulator as sim
 
 
@@ -23,10 +23,13 @@ def generate_dist_curve(
         htd_base = lognorm(s=sigma, scale=np.exp(mu))
     elif dist.lower() in ("uniform", "u"):
         htd_base = uniform(loc = mean - spread, scale = 2 * spread)
+    elif dist.lower() in ("exponential", "ex"):
+        htd_base = expon(scale = mean)
     return htd_base.pdf(range(internal_size)[:size])  # check for out by ones here
 
 
 def generate_est_dist_curve_from_true_dist(true_dist: np.ndarray, sample_period: int):
+    # todo: am I creating an issue by sizing the new dist to match the true one? Perhaps we should double it or something?
     dist = np.zeros(true_dist.size)
     # Here d represents a duration and x is the probability that the true duration is equal to i
     for d, x in enumerate(true_dist):
@@ -72,7 +75,7 @@ def plot_distributions(
     sample_period,
     queries: list[sim.Query],
     bw=2,
-    max_x=1500,
+    max_x=3000,
     query_ids=(1, 2, 3, 4, 5),
 ) -> None:
     fig, axes = pt.subplots(4, len(query_ids))
@@ -80,6 +83,7 @@ def plot_distributions(
     for i, qid in enumerate(query_ids):
         c = cp[i]
         # fixme: remove queries[i] here and use qid properly
+        # fixme: implement an internal size distinct from max_x
         true_dist = generate_dist_curve(
             dist=queries[i].duration_distribution,
             spread=queries[i].duration_spread
