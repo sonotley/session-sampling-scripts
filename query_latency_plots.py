@@ -6,8 +6,10 @@ import matplotlib.pyplot as pt
 import numpy as np
 import polars as pl
 import seaborn as sns
-from scipy.stats import gaussian_kde, lognorm, uniform, expon
+from scipy.stats import lognorm, uniform, expon
 from session_sampling_simulator import session_simulator as sim
+
+from vector_search import generate_kde_from_execution_data
 
 
 def generate_dist_curve(
@@ -28,7 +30,7 @@ def generate_dist_curve(
     return htd_base.pdf(range(internal_size)[:size])  # check for out by ones here
 
 
-def generate_est_dist_curve_from_true_dist(true_dist: np.ndarray, sample_period: int):
+def generate_est_dist_curve_from_true_dist(true_dist: np.ndarray, sample_period: int, a_multiplier: float = 2):
     # todo: am I creating an issue by sizing the new dist to match the true one? Perhaps we should double it or something?
     dist = np.zeros(true_dist.size)
     # Here d represents a duration and x is the probability that the true duration is equal to i
@@ -48,8 +50,8 @@ def generate_est_dist_curve_from_true_dist(true_dist: np.ndarray, sample_period:
         c = int((max_possible_samples - 1) * sample_period)
         min_a = 0
         max_a = a_cutoff
-        lower_limit = 2 * min_a + c
-        upper_limit = 2 * max_a + c
+        lower_limit = a_multiplier * min_a + c
+        upper_limit = a_multiplier * max_a + c
         dist[lower_limit : upper_limit + 1] += (
             x * p_case_max / (upper_limit - lower_limit + 1)
         )
@@ -62,9 +64,9 @@ def generate_est_dist_curve_from_true_dist(true_dist: np.ndarray, sample_period:
             min_a = (
                 a_cutoff + 1
             )  # think it makes sense to have the +1 to prevent double counting
-            max_a = sample_period
-            lower_limit = 2 * min_a + c
-            upper_limit = 2 * max_a + c
+            max_a = sample_period - 1
+            lower_limit = a_multiplier * min_a + c
+            upper_limit = a_multiplier * max_a + c
             dist[lower_limit : upper_limit + 1] += (
                 p_case_min * x / (upper_limit - lower_limit + 1)
             )
@@ -79,20 +81,12 @@ def plot_distributions(
     bw=2,
     max_x=3000,
     query_ids=(1, 2, 3, 4, 5),
+    include_prediction_lines=False,
 ) -> None:
     fig, axes = pt.subplots(4, len(query_ids))
     cp = sns.color_palette("hls", 8)
     for i, qid in enumerate(query_ids):
         c = cp[i]
-        # fixme: remove queries[i] here and use qid properly
-        # fixme: implement an internal size distinct from max_x
-        true_dist = generate_dist_curve(
-            dist=queries[i].duration_distribution,
-            spread=queries[i].duration_spread
-            + 0.01,  # add 0.01 just to convince zero case to work
-            mean=queries[i].mean_duration,
-            size=max_x,
-        )
         sns.histplot(
             execution_data.filter(pl.col("qid") == qid),
             x="true_duration",
@@ -101,12 +95,6 @@ def plot_distributions(
             binrange=(0, max_x),
             color=c,
         )
-        sns.lineplot(
-            true_dist * len(execution_data.filter(pl.col("qid") == qid)) * bw,
-            ax=axes[0, i],
-            color="grey",
-            linewidth=1,
-        )
         sns.histplot(
             execution_data.filter(pl.col("qid_right") == qid),
             x="true_duration",
@@ -115,60 +103,163 @@ def plot_distributions(
             binrange=(0, max_x),
             color=c,
         )
-        sns.lineplot(
-            true_dist * len(execution_data.filter(pl.col("qid_right") == qid)) * bw,
-            ax=axes[1, i],
-            color="grey",
-            linestyle="dotted",
-            linewidth=1,
-        )
-        exp_obs_dist = true_dist * [min(1, x / sample_period) for x in range(max_x)]
-        exp_obs_dist /= sum(exp_obs_dist)
-        sns.lineplot(
-            exp_obs_dist * len(execution_data.filter(pl.col("qid_right") == qid)) * bw,
-            ax=axes[1, i],
-            color="grey",
-            linewidth=1,
-        )
         sns.histplot(
             execution_data.filter(pl.col("qid_right") == qid),
             x="estimate",
+            ax=axes[3, i],
+            binwidth=bw,
+            binrange=(0, max_x),
+            color=c,
+        )
+        # raw_est = (
+        #     execution_data.filter(pl.col("qid_right") == qid)
+        #     .select("estimate")
+        #     .to_numpy()
+        #     .T
+        # )
+        # kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.02)
+        # sns.lineplot(
+        #     2 * kde.pdf(range(max_x)),
+        #     ax=axes[3, i],
+        #     color=c,
+        #     linewidth=1,
+        # )
+        sns.histplot(
+            execution_data.filter(pl.col("qid_right") == qid).with_columns((pl.col("a") + pl.col("c")).alias("elapsed")),
+            x="elapsed",
             ax=axes[2, i],
             binwidth=bw,
             binrange=(0, max_x),
             color=c,
         )
-        sns.lineplot(
-            generate_est_dist_curve_from_true_dist(
-                true_dist,
-                sample_period=sample_period,
+
+        if include_prediction_lines:
+            # fixme: implement an internal size distinct from max_x
+            # fixme: remove queries[i] here and use qid properly
+            true_dist = generate_dist_curve(
+                dist=queries[i].duration_distribution,
+                spread=queries[i].duration_spread
+                + 0.01,  # add 0.01 just to convince zero case to work
+                mean=queries[i].mean_duration,
+                size=max_x,
             )
-            * len(execution_data.filter(pl.col("qid_right") == qid))
-            * bw,
-            ax=axes[2, i],
-            color="grey",
-            linewidth=1,
+            sns.lineplot(
+                true_dist * len(execution_data.filter(pl.col("qid_right") == qid)) * bw,
+                ax=axes[1, i],
+                color="grey",
+                linestyle="dotted",
+                linewidth=1,
+            )
+            exp_obs_dist = true_dist * [min(1, x / sample_period) for x in range(max_x)]
+            exp_obs_dist /= sum(exp_obs_dist)
+            sns.lineplot(
+                exp_obs_dist * len(execution_data.filter(pl.col("qid_right") == qid)) * bw,
+                ax=axes[1, i],
+                color="grey",
+                linewidth=1,
+            )
+            sns.lineplot(
+                true_dist * len(execution_data.filter(pl.col("qid") == qid)) * bw,
+                ax=axes[0, i],
+                color="grey",
+                linewidth=1,
+            )
+
+            sns.lineplot(
+                generate_est_dist_curve_from_true_dist(
+                    true_dist,
+                    sample_period=sample_period,
+                )
+                * len(execution_data.filter(pl.col("qid_right") == qid))
+                * bw,
+                ax=axes[3, i],
+                color="grey",
+                linewidth=1,
+            )
+            sns.lineplot(
+                generate_est_dist_curve_from_true_dist(
+                    true_dist,
+                    sample_period=sample_period,
+                    a_multiplier=1,
+                )
+                * len(execution_data.filter(pl.col("qid_right") == qid))
+                * bw,
+                ax=axes[2, i],
+                color="grey",
+                linewidth=1,
+            )
+            # sns.lineplot(
+            #     generate_est_dist_curve_from_true_dist(
+            #         true_dist,
+            #         sample_period=sample_period,
+            #     ),
+            #     ax=axes[3, i],
+            #     color=c,
+            # )
+        for j in range(4):
+            axes[j, i].set(yticklabels=[], ylabel=None, xlabel=None)
+            axes[j, i].tick_params(left=False)
+    pt.subplots_adjust(wspace=0.1, hspace=0.3, right=0.98, left=0.02)
+    fig.set_size_inches(16,10)
+    # fig.set_dpi(300)
+    pt.show()
+
+
+# todo: tidy this up, just knocked it up for slides
+def plot_one_distribution(
+    execution_data: pl.DataFrame,
+    sample_period,
+    queries: list[sim.Query],
+    bw=2,
+    max_x=3000,
+    query_id=1,
+    include_prediction_lines=False,
+) -> None:
+    fig, axes = pt.subplots(1,1)
+
+    sns.histplot(
+        execution_data.filter(pl.col("qid_right") == query_id),
+        x="estimate",
+        # ax=axes,
+        binwidth=bw,
+        binrange=(0, max_x),
+        # color="#eeeeeeff",
+        stat="density",
+
+    )
+
+    sns.lineplot(
+        generate_kde_from_execution_data(execution_data.filter(pl.col("qid_right") == query_id), "estimate", 3000),
+        # ax=axes,
+        color="grey",
+        linewidth=2,
+    )
+
+    cp = sns.color_palette("hls", 8)
+    for i, qid in enumerate(range(1,6)):
+        c = cp[i]
+        true_dist = generate_dist_curve(
+            dist=queries[i].duration_distribution,
+            spread=queries[i].duration_spread
+            + 0.01,  # add 0.01 just to convince zero case to work
+            mean=queries[i].mean_duration,
+            size=max_x,
         )
         sns.lineplot(
             generate_est_dist_curve_from_true_dist(
                 true_dist,
                 sample_period=sample_period,
             ),
-            ax=axes[3, i],
+            # ax=axes,
             color=c,
-        )
-        raw_est = (
-            execution_data.filter(pl.col("qid_right") == qid)
-            .select("estimate")
-            .to_numpy()
-            .T
-        )
-        kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.02)
-        sns.lineplot(
-            2 * kde.pdf(range(max_x)),
-            ax=axes[3, i],
-            color="grey",
-            linewidth=1,
+            linewidth=2,
         )
 
+    axes.set_ylim((0,0.002))
+    axes.set(yticklabels=[], ylabel=None, xlabel=None)
+    axes.tick_params(left=False)
+    fig.set_size_inches(11,6)
+    fig.set_dpi(200)
+    pt.subplots_adjust(right=0.98, left=0.02, bottom=0.05, top=0.98)
+    pt.savefig("one-dist.png", dpi=300)
     pt.show()

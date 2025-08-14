@@ -17,9 +17,9 @@ import polars as pl
 
 from session_sampling_simulator import session_simulator as sim
 from milestone_timer import MilestoneTimer
-from query_latency_plots import plot_distributions
+from query_latency_plots import plot_distributions, plot_one_distribution
 from snignificant import round_to_sf, round_to_position
-from vector_search import get_brute_force_function, get_db_search_function
+from vector_search import get_brute_force_function, get_db_search_function, generate_kde_from_execution_data
 
 
 mt = MilestoneTimer()
@@ -277,6 +277,7 @@ def perform_runs(
     save_run_data: bool = False,
     read_run_data_from: Path | None = None,
     vector_search_function=None,
+    use_kde_in_vector_search: bool = False
 ):
     if not read_run_data_from and not (
         queries and duration and sample_period and number_of_runs and number_of_phases
@@ -293,8 +294,10 @@ def perform_runs(
             run_args = json.load(f)
         number_of_runs = run_args.get("number_of_runs")
         sample_period = run_args.get("sample_period")
-    else:
-        phases = np.linspace(start=0, stop=1, endpoint=False, num=number_of_phases)
+        number_of_phases = run_args.get("number_of_phases")
+
+
+    phases = np.linspace(start=0, stop=1, endpoint=False, num=number_of_phases)
 
     run_data = []
     run_summaries = []
@@ -334,15 +337,21 @@ def perform_runs(
 
         if vector_search_function:
             qids = run_summary.select(pl.col("qid").unique()).to_series().to_list()
-            # todo: using the KDE for the search would probably be far better
             vector_ests = []
             for q, p in itertools.product(qids, phases):
-                observed_dist = executions_to_hist(
-                    run_executions_augmented.filter(
-                        (pl.col("qid_right") == q) & (pl.col("phase") == p)
-                    ),
-                    bins=4000,
-                )
+                relevant_executions = run_executions_augmented.filter((pl.col("qid_right") == q) & (pl.col("phase") == p))
+
+                if use_kde_in_vector_search:
+                    observed_dist = generate_kde_from_execution_data(
+                        relevant_executions,
+                        column_name="estimate",
+                        max_x=4000
+                    )
+                else:
+                    observed_dist = executions_to_hist(
+                        relevant_executions,
+                        bins=4000,
+                    )
                 vector_ests.append((q, p, vector_search_function(observed_dist)[0]))
 
             vector_df = pl.DataFrame(
@@ -382,7 +391,7 @@ if __name__ == "__main__":
             id=i,
             mean_duration=50 + 250 * (i - 1),
             duration_spread=300,
-            session_proportion=0.05,
+            session_proportion=0.1,
             duration_dist="lognormal",
         )
         for i in range(1, 6)
@@ -396,23 +405,33 @@ if __name__ == "__main__":
         # duration=3600000,
         # sample_period=1000,
         # number_of_runs=1,
-        # number_of_phases=5,
-        # vector_search_function=vector_searcher,
+        # number_of_phases=1,
+        vector_search_function=vector_searcher,
         # save_run_data=True,
-        read_run_data_from=Path("saved/20250813144601"),
+        read_run_data_from=Path("saved/20250813165803"),
     )
 
     # all_executions_augmented.write_database(table_name='execs', if_table_exists='replace', connection="postgresql://postgres:postgres@localhost/simon")
 
     # print(mt.add_milestone("Data written to Postgres"))
 
-    plot_distributions(
-        all_executions_augmented,
-        sample_period,
-        queries=queries,
-        bw=10,
-        query_ids=(1, 2, 3, 4, 5),
-    )
+    # plot_distributions(
+    #     all_executions_augmented,
+    #     sample_period,
+    #     queries=queries,
+    #     bw=10,
+    #     query_ids=(1, 2, 3, 4, 5),
+    #     include_prediction_lines=True,
+    # )
+
+    # plot_one_distribution(
+    #     all_executions_augmented,
+    #     sample_period,
+    #     queries=queries,
+    #     bw=10,
+    #     query_id=5,
+    #     include_prediction_lines=True,
+    # )
 
     pretty_print_summary(summarise_many_runs(runs))
 

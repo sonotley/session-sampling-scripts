@@ -7,22 +7,22 @@ from psycopg2.extras import execute_values
 
 import numpy as np
 
-from query_latency import generate_lognorm
-from query_latency_plots import generate_est_dist_curve_from_true_dist
+from query_latency_plots import generate_est_dist_curve_from_true_dist, generate_dist_curve
 
 dists = []
 
 for mean, z in product(
-    np.arange(start=5, stop=500, step=1), np.arange(start=0.1, stop=2, step=0.2)
+    np.arange(start=10, stop=1500, step=2), np.arange(start=0.1, stop=10, step=0.2)
 ):
-    dist = generate_est_dist_curve_from_true_dist(
-        generate_lognorm(mean, mean * z, 4000), 1000
-    )
-    # dists.append({"mean": mean, "sd": mean * z, "dist": dist})
-    # dists.append((float(mean), float(mean * z), 1, np.array2string(dist, separator=",", threshold=5000)))
-    dists.append((mean, mean * z, dist))
+    # limit the sd so we don't waste lots of space with extreme dists
+    if 10 < mean * z < 3000:
 
+        dist = generate_est_dist_curve_from_true_dist(
+            generate_dist_curve("ln", mean=mean, spread=mean * z, size=4000), 1000
+        )
+        dists.append((mean, mean * z, dist))
 
+# todo: set correct dist type ID for other dist types
 dists_pgvector = (
     ((float(x[0]), float(x[0] * x[1]), 1, x[2].astype(np.float16).tolist()))
     for x in dists

@@ -9,6 +9,7 @@ a search against them.
 import psycopg2 as pg
 import numpy as np
 import pickle
+from scipy.stats import gaussian_kde
 
 
 def get_db_search_function(dsn: str) -> callable:
@@ -39,3 +40,15 @@ def get_brute_force_function(fp: str) -> callable:
         return best
 
     return find_similar_in_pickle
+
+
+def generate_kde_from_execution_data(execution_data, column_name: str, max_x: int) -> np.ndarray:
+    raw_est = (
+        execution_data
+        .select(column_name)
+        .to_numpy()
+        .T
+    )
+    kde = gaussian_kde(np.concat((raw_est, -raw_est), axis=1), bw_method=0.04)
+
+    return 2 * kde.pdf(range(max_x))
