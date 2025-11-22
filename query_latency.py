@@ -104,6 +104,7 @@ def roll_up_samples_to_executions(sample_data: pl.DataFrame) -> pl.DataFrame:
         )
         .with_columns((pl.col("last") - pl.col("first")).alias("c"))
         .with_columns((2 * pl.col("a") + pl.col("c")).alias("estimate"))
+        # .with_columns((pl.col("a")).alias("estimate"))
     )
 
 
@@ -389,10 +390,10 @@ if __name__ == "__main__":
     queries = [
         make_query(
             id=i,
-            mean_duration=50 + 250 * (i - 1),
+            mean_duration=20 * i,
             duration_spread=300,
             session_proportion=0.1,
-            duration_dist="lognormal",
+            duration_dist="exponential",
         )
         for i in range(1, 6)
     ]
@@ -401,14 +402,14 @@ if __name__ == "__main__":
     vector_searcher = get_db_search_function("postgres://simon@localhost/simon")
 
     all_executions_augmented, runs = perform_runs(
-        # queries=queries,
-        # duration=3600000,
-        # sample_period=1000,
-        # number_of_runs=1,
-        # number_of_phases=1,
-        vector_search_function=vector_searcher,
+        queries=queries,
+        duration=3600000,
+        sample_period=1000,
+        number_of_runs=100,
+        number_of_phases=10,
+        # vector_search_function=vector_searcher,
         # save_run_data=True,
-        read_run_data_from=Path("saved/20250813165803"),
+        # read_run_data_from=Path("saved/20250813165803"),
     )
 
     # all_executions_augmented.write_database(table_name='execs', if_table_exists='replace', connection="postgresql://postgres:postgres@localhost/simon")
